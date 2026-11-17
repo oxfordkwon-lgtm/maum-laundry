@@ -152,6 +152,13 @@ textarea.field{height:92px;resize:none;line-height:1.55}
 .steps{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;counter-reset:s}
 .steps li{display:flex;gap:12px;font-size:13.5px;line-height:1.55;counter-increment:s;word-break:keep-all}
 .steps li::before{content:counter(s);flex:none;width:26px;height:26px;border-radius:9px;background:var(--lav-soft);color:var(--lav-deep);font-weight:600;font-size:12px;display:grid;place-items:center}
+.roombox{margin-top:12px;padding:12px 14px;border-radius:14px;background:#f2eff7;display:flex;flex-direction:column;gap:8px;color:var(--ink);font-size:13px}
+.roombox b{color:var(--lav-deep)}
+.room-row{display:flex;gap:8px}
+.room-row input{flex:1;min-width:0;padding:9px 12px;border-radius:12px;border:1px solid #d9d3ea;background:#fff;font:inherit;color:var(--ink)}
+.room-row button,.invite{padding:9px 14px;border:0;border-radius:12px;background:var(--lav);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+.invite{align-self:flex-start;background:var(--lav-deep)}
+.room-note{font-size:11.5px;line-height:1.6;color:var(--muted);word-break:keep-all}
 .keys{margin-top:14px;padding:12px 14px;border-radius:14px;background:#f2eff7;font-size:12.5px;color:var(--muted);line-height:1.7;word-break:keep-all}
 .group{font-size:12px;font-weight:600;color:var(--muted);margin:12px 0 0}
 
@@ -286,6 +293,12 @@ textarea.field{height:92px;resize:none;line-height:1.55}
     <li>기다리는 동안 휴게실 소파에 앉거나 차를 마시고, 다른 손님과 인사하고 대화해요.</li>
   </ol>
   <div class="keys" id="helpLive">바닥을 누르면 걷고, 누른 채로 끌면 계속 걸어요. PC에서는 방향키나 WASD로 걷고 E 키로 가까운 물건을 써요.</div>
+  <div class="roombox" id="roomBox" hidden>
+    <div class="room-line">현재 방 <b id="roomName"></b> · <span id="roomCount"></span></div>
+    <div class="room-row"><input id="roomInput" maxlength="24" placeholder="다른 방 이름" aria-label="방 이름" autocomplete="off"><button type="button" id="roomGo">이동</button></div>
+    <button type="button" class="invite" id="inviteBtn">🔗 초대 링크 복사</button>
+    <div class="room-note" id="roomNote">같은 방 이름끼리 만나요. 친구끼리 정한 방 이름으로 링크를 보내 보세요. 방 이름은 누구나 짐작할 수 있으니 개인정보는 말하지 마세요. 연결된 사람끼리는 인터넷 주소(IP)가 서로 전달될 수 있어요.</div>
+  </div>
 </section>
 
 <script>
@@ -437,7 +450,7 @@ function say(a,text,ms=3800,to=''){a.bubble={text,to,until:performance.now()+ms}
 let me=null,entered=false,pending=null,myWash=null,myDry=null,mySay=null,choice=0,course=20,scent='lav',washIdx=0;
 let occ=new Array(8).fill(null),dryOcc=new Array(6).fill(null);
 const npcs=[],peers=new Map();
-let room=null,myPeer='',connected=false;
+let room=null,myPeer='',connected=false,roomKind='';
 const muted=new Set();
 const feed=[],hearts=[],ripples=[];
 let boardNotes=4,teaWarm=0;
@@ -1164,18 +1177,54 @@ function peerUpdate(a,dt){if(a.seat)return;const dx=a.tx-a.x,dy=a.ty-a.y,d=Math.
   if(d<.03){a.moving=false;a.f=a.fRemote||a.f;return}
   const sp=clamp(d*6,1.2,5),st=Math.min(d,sp*dt);a.x+=dx/d*st;a.y+=dy/d*st;a.moving=d>.08;a.phase+=dt*sp*4.6;const sx=dx-dy;if(Math.abs(sx)>.02)a.f=sx<0?-1:1}
 function updateConn(){const el=$('#conn'),t=$('#connText');t.textContent='';const s=document.createElement('span'),l=document.createElement('span');l.className='live-text';
-  if(room&&connected){el.classList.add('live');s.textContent=`실시간 ${peers.size+1}명`;l.textContent=` · 가상 ${npcs.length}`}
+  if(room&&connected){el.classList.add('live');s.textContent=`실시간 ${peers.size+1}명`;l.textContent=roomKind==='p2p'?` · 방 ${ROOM}`:` · 가상 ${npcs.length}`}
   else if(room){el.classList.remove('live');s.textContent='연결 중…'}
   else{el.classList.remove('live');s.textContent='혼자 체험';l.textContent=` 중 · 가상 ${npcs.length}`}
-  t.append(s,l)}
-async function initRoom(){
-  if(!window.claude||typeof window.claude.use!=='function'){setHelpLive(false);updateConn();return}
-  try{room=await window.claude.use('room')}catch(_){room=null}
-  if(!room){setHelpLive(false);updateConn();return}
-  setHelpLive(true);
+  t.append(s,l);const rc=$('#roomCount');if(rc)rc.textContent=room&&connected?`지금 ${peers.size+1}명`:'연결 중'}
+
+/* =============== Trystero (WebRTC P2P, 서버 없이 같은 방끼리 연결) =============== */
+const TRYS_URLS=['https://cdn.jsdelivr.net/npm/trystero@0.26.0/+esm','https://esm.run/trystero@0.26.0'];
+const APP_ID='maum-laundry-town-v3',TURN=[];/* 회사·학교망처럼 직접 연결이 막히는 곳용 TURN 서버 목록(선택) */
+const ROOM=(()=>{try{const r=(new URLSearchParams(location.search).get('room')||'').trim().replace(/[^0-9A-Za-z가-힣_-]/g,'').slice(0,24);return r||'lobby'}catch(_){return 'lobby'}})();
+async function loadTrystero(){if(window.__trysteroMock)return window.__trysteroMock;
+  for(const u of TRYS_URLS){try{const m=await import(u);if(m&&typeof m.joinRoom==='function')return m}catch(_){}}return null}
+/* Claude의 room과 같은 모양(presence/onPeers/onConnection)으로 감싸서 나머지 코드는 그대로 써요. */
+function makeTrysteroRoom(T,code){
+  const cfg={appId:APP_ID};if(TURN.length)cfg.turnConfig=TURN;
+  const tr=T.joinRoom(cfg,code,{onJoinError:()=>toast('이 네트워크에서는 다른 손님과 직접 연결이 어려울 수 있어요.')});
+  const act=tr.makeAction('presence'),states=new Map();let own=null,peerCb=null;
+  const safe=p=>{try{return Promise.resolve(p).catch(()=>{})}catch(_){return Promise.resolve()}};
+  const emit=()=>{if(!peerCb)return;const list=[{peer:T.selfId,sameTab:true,kind:'viewer'}];
+    for(const [id,v] of states){if(list.length>=25)break;list.push({peer:id,kind:'viewer',presence:v.pr})}peerCb({peers:list})};
+  tr.onPeerJoin=id=>{if(own)safe(act.send(own,{target:id}))};
+  tr.onPeerLeave=id=>{if(states.delete(id))emit()};
+  act.onMessage=(d,c)=>{if(!d||typeof d!=='object'||!c||typeof c.peerId!=='string')return;states.set(c.peerId,{pr:d,t:Date.now()});emit()};
+  /* 심장박동: 놓친 상태를 5초마다 다시 알리고, 70초 넘게 소식 없는 사람은 정리해요(연결 끊김 이벤트의 보험) */
+  const beat=setInterval(()=>{if(own)safe(act.send(own));const now=Date.now();let gone=false;for(const [id,v] of states)if(now-v.t>70000){states.delete(id);gone=true}if(gone)emit()},5000);
+  return{presence(pr){own=pr;return safe(act.send(pr))},onConnection(cb){cb(true)},onPeers(cb){peerCb=cb;emit()},leave(){clearInterval(beat);try{tr.leave()}catch(_){}}}}
+function wireRoom(){
   room.onConnection(c=>{connected=c;if(c){lastPr='';pushPresence(true)}updateConn()},()=>{room=null;connected=false;updateConn()});
   room.onPeers(onPeers,()=>{connected=false;updateConn()});updateConn()}
-function setHelpLive(on){$('#helpLive').textContent=(on?'이 링크를 공유받아 Claude에 로그인한 상태로 연 사람들이 실시간으로 같은 세탁소에 보여요. ':'지금은 혼자 체험하는 화면이에요. Claude에서 공유받은 링크로 열면 다른 사람과 실시간으로 함께할 수 있어요. ')+'바닥을 누르면 걷고, 누른 채로 끌면 계속 걸어요. PC에서는 방향키나 WASD로 걷고 E 키로 가까운 물건을 써요.'}
+async function initRoom(){
+  if(window.claude&&typeof window.claude.use==='function'){
+    try{room=await window.claude.use('room')}catch(_){room=null}
+    if(room){roomKind='claude';setHelpLive('claude');wireRoom();return}
+    setHelpLive('solo');updateConn();return}/* Claude 안에서는 WebRTC가 막혀 있어 혼자 체험으로 둬요 */
+  const T=await loadTrystero();
+  if(!T){setHelpLive('solo');updateConn();return}
+  try{room=makeTrysteroRoom(T,ROOM);roomKind='p2p'}catch(_){room=null}
+  if(!room){setHelpLive('solo');updateConn();return}
+  setHelpLive('p2p');wireRoom();
+  addFeed('세탁소 안내','🟢',`'${ROOM}' 방에서 다른 손님을 기다려요. 도움말에서 초대 링크를 복사할 수 있어요.`,{sys:true,live:true})}
+window.addEventListener('pagehide',()=>{try{if(room&&typeof room.leave==='function')room.leave()}catch(_){}});
+function setHelpLive(mode){const base='바닥을 누르면 걷고, 누른 채로 끌면 계속 걸어요. PC에서는 방향키나 WASD로 걷고 E 키로 가까운 물건을 써요.';
+  const msg={claude:'이 링크를 공유받아 Claude에 로그인한 상태로 연 사람들이 실시간으로 같은 세탁소에 보여요. ',p2p:'같은 방 이름으로 접속한 사람들이 서버 없이 바로 연결(WebRTC)되어 실시간으로 같은 세탁소에 보여요. ',solo:'지금은 혼자 체험하는 화면이에요. '};
+  $('#helpLive').textContent=(msg[mode]||msg.solo)+base;
+  const box=$('#roomBox');if(box){box.hidden=mode!=='p2p';if(mode==='p2p')$('#roomName').textContent=ROOM}}
+function inviteUrl(r){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('room',r);return u.toString()}
+$('#inviteBtn').onclick=async()=>{const url=inviteUrl(ROOM);try{await navigator.clipboard.writeText(url);toast('초대 링크를 복사했어요. 친구에게 보내 보세요.')}catch(_){$('#roomNote').textContent='복사하지 못했어요. 이 주소를 직접 복사해 주세요: '+url}};
+$('#roomGo').onclick=()=>{const v=$('#roomInput').value.trim().replace(/[^0-9A-Za-z가-힣_-]/g,'').slice(0,24);if(!v){toast('방 이름을 적어 주세요. 글자, 숫자, - _ 만 쓸 수 있어요.');return}location.assign(inviteUrl(v))};
+$('#roomInput').addEventListener('keydown',e=>{if(e.key==='Enter')$('#roomGo').click()});
 
 /* =============== nearby action & HUD =============== */
 let nearObj=null,actionKey='';const actionBtn=$('#action'),actionText=$('#actionText');
