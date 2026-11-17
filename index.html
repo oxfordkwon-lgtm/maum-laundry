@@ -255,8 +255,8 @@ textarea.field{height:92px;resize:none;line-height:1.55}
   <p class="sub" id="chatSub">지금 세탁소에 있는 사람들에게 말풍선으로 전해져요.</p>
   <div class="feed" id="chatFeed" aria-live="polite"></div>
   <div class="chips" id="quickChips"></div>
-  <div class="compose"><input class="field" id="chatInput" maxlength="80" placeholder="짧은 인사를 남겨 보세요 (80자)" autocomplete="off"><button class="btn" id="chatSend" type="button">보내기</button></div>
-  <p class="fine">연락처·주소 같은 개인정보와 고민 원문은 적지 마세요. 대화는 저장하지 않아요.</p>
+  <div class="compose" id="chatCompose"><input class="field" id="chatInput" maxlength="80" placeholder="짧은 인사를 남겨 보세요 (80자)" autocomplete="off"><button class="btn" id="chatSend" type="button">보내기</button></div>
+  <p class="fine" id="chatPrivacy">연락처·주소 같은 개인정보와 고민 원문은 적지 마세요.</p>
 </section>
 
 <section class="sheet" id="sheet-person" role="dialog" aria-modal="true" aria-labelledby="personName" hidden>
@@ -899,7 +899,7 @@ let toastT=0;function toast(m){const t=$('#toast');t.textContent=m;t.classList.a
 /* =============== sheets =============== */
 let current=null,noteQueued=false;
 function openSheet(id){if(current)$('#sheet-'+current).hidden=true;current=id;$('#scrim').hidden=false;const el=$('#sheet-'+id);el.hidden=false;
-  const f=el.querySelector('textarea,input')||el.querySelector('.list button,.chips button,.opts button,.btn');if(matchMedia('(pointer:fine)').matches||id==='entry')setTimeout(()=>f&&f.focus({preventScroll:true}),40)}
+  const field=el.querySelector('textarea,input');const f=field&&!field.closest('[hidden]')?field:el.querySelector('.list button,.chips button,.opts button,.btn');if(matchMedia('(pointer:fine)').matches||id==='entry')setTimeout(()=>f&&f.focus({preventScroll:true}),40)}
 function closeSheet(){if(!current||current==='entry')return;$('#sheet-'+current).hidden=true;$('#scrim').hidden=true;current=null;
   if(noteQueued&&myWash&&washDone()){noteQueued=false;openNote()}}
 $('#scrim').addEventListener('click',closeSheet);
@@ -982,24 +982,32 @@ function resolveSeats(){for(const p of peers.values()){if(!p.seat)continue;
 function freeSeat(){let best=null,bd=1e9;for(const s of SEATS){if(seatHolder(s.id))continue;const d=Math.hypot(s.ax-me.x,s.ay-me.y);if(d<bd){bd=d;best=s}}return best}
 
 /* =============== actions =============== */
-let noteShown=false,dryNoted=false;
+let noteShown=false,dryNoted=false,folding=false;
+function washBlockReason(){
+  if(myWash)return `이미 ${myWash.i+1}번 세탁기를 돌리고 있어요.`;
+  if(myDry)return '건조기에서 빨래를 먼저 꺼내 주세요.';
+  if(me.hold==='basket'||me.hold==='dried')return '들고 있는 빨래를 먼저 건조하거나 개어 주세요.';
+  return '';
+}
 function runAction(it){if(!it||!entered)return;
   switch(it.type){
   case 'washer':{const c=occ[it.idx];
     if(c&&c.kind==='me'){if(washDone())openNote();else toast('세탁 중이에요. 휴게실에서 쉬다 와도 돼요.');return}
     if(c){toast(`${c.who.name} 님이 쓰고 있어요. 빈 세탁기를 골라 보세요.`);return}
-    if(myWash){toast(`이미 ${myWash.i+1}번 세탁기를 돌리고 있어요.`);return}
-    if(me.hold==='basket'||me.hold==='dried'){toast('들고 있는 빨래를 먼저 건조하거나 개어 주세요.');return}
+    const reason=washBlockReason();if(reason){toast(reason);return}
     openWash(it.idx);return}
   case 'dryer':{const slots=[it.col*2+1,it.col*2];const mineSlot=slots.find(i=>dryOcc[i]&&dryOcc[i].kind==='me');
     if(mineSlot!==undefined){if(dryDone()){myDry=null;me.hold='dried';$('#dryPill').hidden=true;say(me,'따끈따끈 ✨');hearts.push(...burst(me,'♨'));toast('보송하게 말랐어요. 가운데 테이블에서 개 보세요.');pushPresence(true)}else toast('건조 중이에요. 조금만 기다려 주세요.');return}
+    if(folding){toast('빨래를 개는 중이에요.');return}
     if(me.hold!=='basket'){toast(me.hold==='dried'?'이미 말린 빨래예요. 테이블에서 개 보세요.':'세탁을 마친 빨래가 있어야 건조기를 쓸 수 있어요.');return}
     if(myDry){toast('이미 건조기를 돌리고 있어요.');return}
     const free=slots.find(i=>!dryOcc[i]);if(free===undefined){toast('이 건조기는 둘 다 사용 중이에요. 옆 건조기를 써 보세요.');return}
     myDry={i:free,s:Date.now(),d:15000};me.hold='';dryNoted=false;say(me,'♨ 건조 시작!');toast('15초 동안 건조해요. 휴게실에서 기다려도 돼요.');
     addFeed('세탁소 안내','♨',`${me.name} 님이 건조기를 돌리기 시작했어요.`,{sys:true});$('#dryPill').hidden=false;$('#dryPill').classList.remove('done');$('#dryLabel').textContent='♨ 건조';pushPresence(true);return}
-  case 'fold':{if(me.hold!=='basket'&&me.hold!=='dried'){toast(myWash||myDry?'빨래가 끝나면 여기서 갤 수 있어요.':'세탁한 빨래를 가져오면 여기서 갤 수 있어요.');return}
-    const dried=me.hold==='dried';say(me,'착착… 반듯하게 개는 중',1800);setTimeout(()=>{if(!me)return;me.hold='';say(me,dried?'다 갰다! 보송보송 ✨':'다 갰다! ✨');hearts.push(...burst(me,'🧺'));
+  case 'fold':{if(folding)return;
+    if(me.hold!=='basket'&&me.hold!=='dried'){toast(myWash||myDry?'빨래가 끝나면 여기서 갤 수 있어요.':'세탁한 빨래를 가져오면 여기서 갤 수 있어요.');return}
+    folding=true;
+    const dried=me.hold==='dried';say(me,'착착… 반듯하게 개는 중',1800);setTimeout(()=>{folding=false;me.hold='';say(me,dried?'다 갰다! 보송보송 ✨':'다 갰다! ✨');hearts.push(...burst(me,'🧺'));
       addFeed('세탁소 안내','🧺',`${me.name} 님이 빨래를 다 갰어요.`,{sys:true});toast(dried?'오늘 할 일 하나를 끝까지 해냈어요.':'다음엔 건조기도 써 보세요. 더 보송해져요.');pushPresence(true)},1800);return}
   case 'vend':toast('세제와 섬유유연제는 세탁기에 자동으로 들어가요. 오늘은 무료예요 🙂');say(me,'오, 자동 투입이구나');return;
   case 'change':toast('마음세탁소는 동전이 필요 없어요. 모든 세탁이 무료예요.');return;
@@ -1016,6 +1024,7 @@ const worry=$('#worry');worry.addEventListener('input',()=>{$('#worryCount').tex
 $('#presets').querySelectorAll('button').forEach(b=>b.onclick=()=>{worry.value=b.dataset.text;$('#worryCount').textContent=worry.value.length;worry.focus()});
 $('#courses').querySelectorAll('button').forEach(b=>b.onclick=()=>{course=Number(b.dataset.sec);$('#courses').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)))});
 $('#startBtn').addEventListener('click',()=>{
+  const reason=washBlockReason();if(reason){$('#washErr').textContent=reason;return}
   if(!worry.value.trim()){$('#washErr').textContent='세탁할 마음을 한 줄 이상 적어 주세요.';worry.focus();return}
   const c=occ[washIdx];if(c&&c.kind!=='npc'){$('#washErr').textContent='방금 다른 손님이 이 세탁기를 썼어요. 다른 세탁기를 골라 주세요.';return}
   if(c&&c.kind==='npc')c.who.wash=null;
@@ -1025,7 +1034,7 @@ $('#startBtn').addEventListener('click',()=>{
   $('#washPill').hidden=false;$('#washPill').classList.remove('done');$('#washLabel').textContent='🫧 세탁';pushPresence(true);
   setTimeout(()=>{const n=nearestNpc(me,5);if(n)say(n,'같이 기다려요 🌙')},1400)});
 function openNote(){$('#noteText').textContent=pick(NOTES);openSheet('note')}
-$('#takeBtn').addEventListener('click',()=>{myWash=null;me.hold='basket';$('#washPill').hidden=true;closeSheet();say(me,'빨래 꺼냈다');hearts.push(...burst(me,'🫧'));
+$('#takeBtn').addEventListener('click',()=>{if(!washDone())return;myWash=null;me.hold='basket';$('#washPill').hidden=true;closeSheet();say(me,'빨래 꺼냈다');hearts.push(...burst(me,'🫧'));
   addFeed('세탁소 안내','💜',`${me.name} 님의 세탁이 끝났어요.`,{sys:true});toast('왼쪽 벽 건조기에 돌리거나, 가운데 테이블에서 바로 개도 돼요.');pushPresence(true)});
 $('#copyBtn').addEventListener('click',async()=>{const text=$('#noteText').textContent;try{await navigator.clipboard.writeText(text);toast('응원 쪽지를 복사했어요.')}catch(_){const r=document.createRange();r.selectNodeContents($('#noteText'));const s=getSelection();s.removeAllRanges();s.addRange(r);toast('쪽지 문장을 선택했어요. 길게 눌러 복사해 주세요.')}});
 $('#washPill').addEventListener('click',()=>{if(washDone())openNote();else toast('세탁 중이에요. 끝나면 쪽지를 드릴게요.')});
@@ -1038,20 +1047,24 @@ $('#boardBtn').onclick=()=>{if(entered)openBoard()};
 
 /* chat */
 let chatTarget=null,sayCool=0;
+function updateChatMode(){
+  $('#chatCompose').hidden=!!room;
+  $('#chatPrivacy').textContent=room?'실시간 대화에서는 준비된 문장만 보낼 수 있어요.':'연락처·주소 같은 개인정보와 고민 원문은 적지 마세요.';
+}
 const quick=$('#quickChips');QUICK.forEach(id=>{const b=document.createElement('button');b.type='button';b.textContent=PH[id][1];b.onclick=()=>speak({p:id},chatTarget);quick.append(b)});
 function openChat(target){chatTarget=target||null;$('#chatTitle').textContent=target?`${target.name} 님에게`:'이웃과 대화하기';
   $('#chatSub').textContent=target?'이 사람에게 말풍선으로 전해져요. 다른 손님에게도 보여요.':'지금 세탁소에 있는 사람들에게 말풍선으로 전해져요.';renderChat();openSheet('chat')}
 $('#chatBtn').onclick=()=>{if(entered)openChat(null)};
 const CONTACT=/(\d{2,4}[\s.-]?\d{3,4}[\s.-]?\d{4})|([\w.+-]+@[\w-]+\.[\w.]+)|(카톡|오픈채팅|kakao|instagram|인스타)/i;
-function sendChat(){const input=$('#chatInput');const text=cleanText(input.value,80);if(!text)return;
-  if(CONTACT.test(text)){toast('연락처나 계정은 보낼 수 없어요. 이곳에서는 인사만 나눠요.');return}
+function sendChat(){if(room)return;const input=$('#chatInput');const text=cleanText(input.value,80);if(!text)return;
+  if(CONTACT.test(text.normalize('NFKC'))){toast('연락처나 계정은 보낼 수 없어요. 이곳에서는 인사만 나눠요.');return}
   if(speak({t:text},chatTarget))input.value=''}
 $('#chatSend').onclick=sendChat;$('#chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();sendChat()}});
 document.querySelectorAll('[data-say]').forEach(b=>b.addEventListener('click',()=>{if(entered)speak({p:b.dataset.say},null)}));
-function speak(msg,target,board=false){if(!me)return false;const now=performance.now();if(now<sayCool){toast('조금만 천천히 말해 주세요.');return false}sayCool=now+1200;
+function speak(msg,target,board=false){if(!me||(room&&!msg.p))return false;const now=performance.now();if(now<sayCool){toast('조금만 천천히 말해 주세요.');return false}sayCool=now+1200;
   const text=msg.p?PH[msg.p][1]:msg.t;say(me,text,4500,target?target.name:'');hearts.push(...burst(me,msg.p==='cheer'||board?'💜':'✨',2));
   addFeed(me.name,emojiOf(me),text,{to:target?target.name:'',board,talk:!board,mine:true});
-  mySay={...(msg.p?{p:msg.p}:{t:text}),k:Date.now(),to:target&&target.kind==='peer'?target.peer:null,b:board?1:0};pushPresence(true);
+  mySay=msg.p?{p:msg.p,k:Date.now(),to:target&&target.kind==='peer'?target.peer:null,b:board?1:0}:null;pushPresence(true);
   const responders=target&&target.kind==='npc'?[target]:npcs.filter(n=>Math.hypot(n.x-me.x,n.y-me.y)<6).slice(0,msg.p?2:1);
   responders.forEach((n,i)=>setTimeout(()=>{if(!npcs.includes(n))return;const r=msg.p?PH[pick(REPLY[msg.p]||['smile'])][1]:pick(FREE_REPLY);say(n,r);addFeed(n.name,emojiOf(n),r,{talk:true});hearts.push(...burst(n,'💜',1))},1000+i*900+rand(0,500)));
   return true}
@@ -1140,12 +1153,12 @@ function pushPresence(force){const now=performance.now();if(!force&&now-lastPush
   const pr={v:3,n:me.name,e:me.e,x:+me.x.toFixed(2),y:+me.y.toFixed(2),f:me.f,s:me.seat?me.seat.id:null,st:me.seatT||0,h:me.hold||'',w:myWash?{i:myWash.i,s:myWash.s,d:myWash.d,sc:myWash.sc}:null,r:myDry?{i:myDry.i,s:myDry.s,d:myDry.d}:null,say:mySay};
   const js=JSON.stringify(pr);if(js===lastPr)return;lastPr=js;room.presence(pr).catch(()=>{})}
 function num(v,a,b,d){return typeof v==='number'&&Number.isFinite(v)?clamp(v,a,b):d}
-function readJob(j,n,withScent){if(!j||typeof j!=='object'||!Number.isInteger(j.i)||j.i<0||j.i>=n)return null;const o={i:j.i,s:num(j.s,0,9e15,Date.now()),d:num(j.d,5000,180000,30000)};if(withScent)o.sc=SCENTS[j.sc]?j.sc:'lav';return o}
+function readJob(j,n,withScent){if(!j||typeof j!=='object'||!Number.isInteger(j.i)||j.i<0||j.i>=n)return null;const o={i:j.i,s:num(j.s,0,9e15,Date.now()),d:num(j.d,5000,180000,30000)};if(withScent)o.sc=typeof j.sc==='string'&&Object.hasOwn(SCENTS,j.sc)?j.sc:'lav';return o}
 function readPresence(pr){if(!pr||pr.v!==3||typeof pr.n!=='string')return null;
   let sy=null;if(pr.say&&typeof pr.say==='object'){const k=num(pr.say.k,0,9e15,0),to=typeof pr.say.to==='string'?pr.say.to.slice(0,64):null,b=pr.say.b?1:0;
-    if(typeof pr.say.p==='string'&&PH[pr.say.p])sy={p:pr.say.p,k,to,b};else if(typeof pr.say.t==='string'){const t=cleanText(pr.say.t,80);if(t&&!CONTACT.test(t))sy={t,k,to,b:0}}}
-  return{n:cleanText(pr.n,8)||'손님',e:clamp(pr.e|0,0,AVATARS.length-1),x:num(pr.x,BND.x0,BND.x1,DOOR.x),y:num(pr.y,BND.y0,BND.y1,DOOR.y),f:pr.f<0?-1:1,
-    s:typeof pr.s==='string'&&SEAT_BY_ID[pr.s]?pr.s:null,st:num(pr.st,0,9e15,0),h:HOLDS.includes(pr.h)?pr.h:'',w:readJob(pr.w,8,true),r:readJob(pr.r,6,false),say:sy}}
+    if(typeof pr.say.p==='string'&&Object.hasOwn(PH,pr.say.p))sy={p:pr.say.p,k,to,b}}
+  return{n:cleanText(pr.n,8)||'손님',e:Math.trunc(num(pr.e,0,AVATARS.length-1,0)),x:num(pr.x,BND.x0,BND.x1,DOOR.x),y:num(pr.y,BND.y0,BND.y1,DOOR.y),f:num(pr.f,-1,1,1)<0?-1:1,
+    s:typeof pr.s==='string'&&Object.hasOwn(SEAT_BY_ID,pr.s)?pr.s:null,st:num(pr.st,0,9e15,0),h:HOLDS.includes(pr.h)?pr.h:'',w:readJob(pr.w,8,true),r:readJob(pr.r,6,false),say:sy}}
 function onPeers(ch){const seen=new Set();
   for(const p of ch.peers){if(p.sameTab){myPeer=p.peer;continue}if(p.kind!=='viewer')continue;const pr=readPresence(p.presence);if(!pr)continue;seen.add(p.peer);
     let a=peers.get(p.peer);
@@ -1153,7 +1166,7 @@ function onPeers(ch){const seen=new Set();
       if(entered)addFeed('세탁소 안내','🟢',`${pr.n} 님이 실시간으로 들어왔어요.`,{sys:true,live:true})}
     a.name=pr.n+(p.isMe?' (다른 탭)':'');a.e=pr.e;a.tx=pr.x;a.ty=pr.y;a.fRemote=pr.f;a.hold=pr.h;a.wash=pr.w;a.dry=pr.r;a.seatT=pr.st;
     const s=pr.s?SEAT_BY_ID[pr.s]:null;if(s!==a.seat){if(s){a.seat=s;a.x=s.x;a.y=s.y}else{a.seat=null;a.x=pr.x;a.y=pr.y}}
-    if(pr.say&&pr.say.k!==a.lastK){a.lastK=pr.say.k;if(Date.now()-pr.say.k<9000&&!muted.has(p.peer)){const text=pr.say.p?PH[pr.say.p][1]:pr.say.t;
+    if(pr.say&&pr.say.k!==a.lastK){a.lastK=pr.say.k;if(Date.now()-pr.say.k<9000&&!muted.has(p.peer)){const text=PH[pr.say.p][1];
       const toName=pr.say.to?(pr.say.to===myPeer&&me?me.name:peers.get(pr.say.to)?.name||''):'';
       say(a,text,4500,toName);addFeed(a.name,emojiOf(a),text,{to:toName,live:true,board:!!pr.say.b,talk:!pr.say.b});if(pr.say.b)boardNotes++;
       if(pr.say.to&&pr.say.to===myPeer){toast(`${a.name} 님이 나에게: ${text}`);hearts.push(...burst(me||a,'💜',3))}}}}
@@ -1172,8 +1185,8 @@ async function initRoom(){
   if(!window.claude||typeof window.claude.use!=='function'){setHelpLive(false);updateConn();return}
   try{room=await window.claude.use('room')}catch(_){room=null}
   if(!room){setHelpLive(false);updateConn();return}
-  setHelpLive(true);
-  room.onConnection(c=>{connected=c;if(c){lastPr='';pushPresence(true)}updateConn()},()=>{room=null;connected=false;updateConn()});
+  setHelpLive(true);updateChatMode();
+  room.onConnection(c=>{connected=c;if(c){lastPr='';pushPresence(true)}updateConn()},()=>{room=null;connected=false;setHelpLive(false);updateChatMode();updateConn()});
   room.onPeers(onPeers,()=>{connected=false;updateConn()});updateConn()}
 function setHelpLive(on){$('#helpLive').textContent=(on?'이 링크를 공유받아 Claude에 로그인한 상태로 연 사람들이 실시간으로 같은 세탁소에 보여요. ':'지금은 혼자 체험하는 화면이에요. Claude에서 공유받은 링크로 열면 다른 사람과 실시간으로 함께할 수 있어요. ')+'바닥을 누르면 걷고, 누른 채로 끌면 계속 걸어요. PC에서는 방향키나 WASD로 걷고 E 키로 가까운 물건을 써요.'}
 
@@ -1186,10 +1199,10 @@ function updateNearby(){let best=null,bd=.8;
   nearObj=best;let label='',wait=false;
   if(best){switch(best.type){
     case 'washer':{const c=occ[best.idx],n=best.idx+1;if(c&&c.kind==='me'){label=washDone()?`💌 ${n}번 · 응원 쪽지 받기`:`🫧 ${n}번 · 세탁 중`;wait=!washDone()}
-      else if(c){label=`${c.who.name} 님이 세탁 중이에요`;wait=true}else if(myWash){label=`${myWash.i+1}번 세탁기를 쓰는 중이에요`;wait=true}else label=`🫧 ${n}번 세탁기에 마음 넣기`;break}
+      else if(c){label=`${c.who.name} 님이 세탁 중이에요`;wait=true}else if(myDry){label='건조기에서 빨래를 먼저 꺼내 주세요';wait=true}else if(myWash){label=`${myWash.i+1}번 세탁기를 쓰는 중이에요`;wait=true}else label=`🫧 ${n}번 세탁기에 마음 넣기`;break}
     case 'dryer':{const slots=[best.col*2+1,best.col*2],mine=slots.some(i=>dryOcc[i]&&dryOcc[i].kind==='me'),anyFree=slots.some(i=>!dryOcc[i]);
-      if(mine){label=dryDone()?'♨ 마른 빨래 꺼내기':'♨ 건조 중';wait=!dryDone()}else if(me.hold==='basket'){label=anyFree?'♨ 건조기에 넣기':'이 건조기는 모두 사용 중';wait=!anyFree}else{label='♨ 건조기';wait=true}break}
-    case 'fold':label=me.hold==='basket'||me.hold==='dried'?'🧺 빨래 개기':'🧺 빨래 개는 테이블';wait=!(me.hold==='basket'||me.hold==='dried');break;
+      if(mine){label=dryDone()?'♨ 마른 빨래 꺼내기':'♨ 건조 중';wait=!dryDone()}else if(folding){label='🧺 빨래 개는 중';wait=true}else if(me.hold==='basket'){label=anyFree?'♨ 건조기에 넣기':'이 건조기는 모두 사용 중';wait=!anyFree}else{label='♨ 건조기';wait=true}break}
+    case 'fold':if(folding){label='🧺 빨래 개는 중';wait=true;break}label=me.hold==='basket'||me.hold==='dried'?'🧺 빨래 개기':'🧺 빨래 개는 테이블';wait=!(me.hold==='basket'||me.hold==='dried');break;
     case 'vend':label='🧴 세제 자판기 보기';break;
     case 'change':label='🪙 동전 교환기';break;
     case 'seat':label=me.seat?'🚶 일어나기':'🛋 소파에 앉기';break;
